@@ -143,8 +143,20 @@ impl eframe::App for MainUi {
                         });
                 });
 
-                if ui.add(egui::Button::new("connection")).clicked() {
-                    self.serial_list = available_ports().unwrap_or(vec![])
+                if ui
+                    .add(egui::Button::new(if self.en_connect {
+                        "connection"
+                    } else {
+                        "disconnection"
+                    }))
+                    .clicked()
+                {
+                    if self.en_connect {
+
+                    }
+                    else {
+                        
+                    }
                 }
             });
         });
