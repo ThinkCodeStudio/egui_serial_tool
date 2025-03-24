@@ -1,6 +1,12 @@
+use std::rc::Rc;
+
 use crate::loader::load_baud;
 use eframe::egui;
-use tokio_serial::{available_ports, DataBits, Parity, SerialPortBuilder, SerialPortBuilderExt, SerialPortInfo, SerialStream, StopBits};
+use tokio::io::AsyncReadExt;
+use tokio_serial::{
+    available_ports, DataBits, Parity, SerialPortBuilder, SerialPortBuilderExt, SerialPortInfo,
+    SerialStream, StopBits,
+};
 
 const BAUD_FILE_PATH: &str = "baud.ini";
 
@@ -14,8 +20,6 @@ pub struct MainUi {
     selected_stop_bits: StopBits,
     selected_parity: Parity,
     en_connect: bool,
-
-    serial: SerialPortBuilder,
 }
 
 impl Default for MainUi {
@@ -33,13 +37,48 @@ impl Default for MainUi {
             selected_stop_bits: StopBits::One,
             selected_parity: Parity::None,
             en_connect: true,
-
-            serial: tokio_serial::new("", 0),
         }
     }
 }
 
-impl MainUi {}
+impl MainUi {
+    fn connection(&mut self) {
+        let (rx_sender, rx_receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+        let (tx_sender, tx_receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+
+        let serial = tokio_serial::new(self.selected_port.port_name.clone(), self.selected_baud)
+            .data_bits(self.selected_data_bits)
+            .stop_bits(self.selected_stop_bits)
+            .parity(self.selected_parity)
+            .open_native_async()
+            .unwrap();
+
+        let (mut serial_rx, mut serial_tx) = tokio::io::split(serial);
+        tokio::spawn(async move {
+            let rx_send = rx_sender.clone();
+            let mut buf = [0u8; 1024];
+            loop {
+                match serial_rx.read(&mut buf).await {
+                    Ok(n) => {
+                        rx_send.send(buf.as_mut_slice()).await.unwrap();
+                    },
+                    Err(e) => {
+                        eprintln!("Read error: {}", e);
+                        break;
+                    }
+                }
+            }
+        });
+
+        tokio::spawn(async move {
+            while let Some(data) = tx_receiver.recv().await {
+                serial_tx.write_all(data).await.unwrap();
+            }
+        });
+    }
+
+    fn disconnection(&mut self) {}
+}
 
 impl eframe::App for MainUi {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -155,16 +194,14 @@ impl eframe::App for MainUi {
                     }))
                     .clicked()
                 {
-                    if self.en_connect {
-                        self.serial = tokio_serial::new(
-                            self.selected_port.port_name.clone(),
-                            self.selected_baud,
-                        )
-                        .data_bits(self.selected_data_bits)
-                        .stop_bits(self.selected_stop_bits)
-                        .parity(self.selected_parity);
+                    if self.selected_port.port_type != tokio_serial::SerialPortType::Unknown {
+                        if self.en_connect {
+                            self.connection();
+                        } else {
+                            self.disconnection();
+                        }
+                        self.en_connect = !self.en_connect;
                     }
-                    self.en_connect = !self.en_connect;
                 }
             });
         });
