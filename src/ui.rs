@@ -1,6 +1,6 @@
 use crate::loader::load_baud;
 use eframe::egui;
-use tokio_serial::{available_ports, DataBits, Parity, SerialPortInfo, StopBits};
+use tokio_serial::{available_ports, DataBits, Parity, SerialPortBuilder, SerialPortBuilderExt, SerialPortInfo, SerialStream, StopBits};
 
 const BAUD_FILE_PATH: &str = "baud.ini";
 
@@ -14,6 +14,8 @@ pub struct MainUi {
     selected_stop_bits: StopBits,
     selected_parity: Parity,
     en_connect: bool,
+
+    serial: SerialPortBuilder,
 }
 
 impl Default for MainUi {
@@ -31,6 +33,8 @@ impl Default for MainUi {
             selected_stop_bits: StopBits::One,
             selected_parity: Parity::None,
             en_connect: true,
+
+            serial: tokio_serial::new("", 0),
         }
     }
 }
@@ -152,11 +156,15 @@ impl eframe::App for MainUi {
                     .clicked()
                 {
                     if self.en_connect {
-
+                        self.serial = tokio_serial::new(
+                            self.selected_port.port_name.clone(),
+                            self.selected_baud,
+                        )
+                        .data_bits(self.selected_data_bits)
+                        .stop_bits(self.selected_stop_bits)
+                        .parity(self.selected_parity);
                     }
-                    else {
-                        
-                    }
+                    self.en_connect = !self.en_connect;
                 }
             });
         });
