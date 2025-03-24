@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::loader::load_baud;
 use eframe::egui;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_serial::{
     available_ports, DataBits, Parity, SerialPortBuilder, SerialPortBuilderExt, SerialPortInfo,
     SerialStream, StopBits,
@@ -43,8 +43,8 @@ impl Default for MainUi {
 
 impl MainUi {
     fn connection(&mut self) {
-        let (rx_sender, rx_receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
-        let (tx_sender, tx_receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+        let (rx_sender, mut rx_receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+        let (tx_sender, mut tx_receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
 
         let serial = tokio_serial::new(self.selected_port.port_name.clone(), self.selected_baud)
             .data_bits(self.selected_data_bits)
@@ -60,7 +60,7 @@ impl MainUi {
             loop {
                 match serial_rx.read(&mut buf).await {
                     Ok(n) => {
-                        rx_send.send(buf.as_mut_slice()).await.unwrap();
+                        rx_send.send(buf.to_vec()).await.unwrap();
                     },
                     Err(e) => {
                         eprintln!("Read error: {}", e);
@@ -71,8 +71,8 @@ impl MainUi {
         });
 
         tokio::spawn(async move {
-            while let Some(data) = tx_receiver.recv().await {
-                serial_tx.write_all(data).await.unwrap();
+            while let Some(mut data) = tx_receiver.recv().await {
+                serial_tx.write_all(data.as_mut_slice()).await.unwrap();
             }
         });
     }
