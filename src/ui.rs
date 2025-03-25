@@ -1,14 +1,21 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::loader::load_baud;
-use eframe::egui;
+use eframe::egui::{self, menu};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::{self, Mutex};
 use tokio_serial::{
-    available_ports, DataBits, Parity, SerialPortBuilder, SerialPortBuilderExt, SerialPortInfo,
-    SerialStream, StopBits,
+    available_ports, DataBits, Parity, SerialPortBuilderExt, SerialPortInfo, StopBits,
 };
 
 const BAUD_FILE_PATH: &str = "baud.ini";
+
+#[derive(PartialEq, Eq)]
+enum SERIAL_STATE {
+    IDEL,
+    DISCONNECTED,
+    CONNECTED,
+}
 
 pub struct MainUi {
     serial_list: Vec<SerialPortInfo>,
@@ -20,6 +27,7 @@ pub struct MainUi {
     selected_stop_bits: StopBits,
     selected_parity: Parity,
     en_connect: bool,
+    serial_state: Arc<Mutex<SERIAL_STATE>>,
 }
 
 impl Default for MainUi {
@@ -37,47 +45,74 @@ impl Default for MainUi {
             selected_stop_bits: StopBits::One,
             selected_parity: Parity::None,
             en_connect: true,
+            serial_state: Arc::new(Mutex::new(SERIAL_STATE::IDEL)),
         }
     }
 }
 
 impl MainUi {
-    fn connection(&mut self) {
+    async fn connection(&mut self) {
         let (rx_sender, mut rx_receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
         let (tx_sender, mut tx_receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
 
-        let serial = tokio_serial::new(self.selected_port.port_name.clone(), self.selected_baud)
-            .data_bits(self.selected_data_bits)
-            .stop_bits(self.selected_stop_bits)
-            .parity(self.selected_parity)
-            .open_native_async()
-            .unwrap();
+        let mut state = self.serial_state.lock().await;
+        *state = SERIAL_STATE::CONNECTED;
 
-        let (mut serial_rx, mut serial_tx) = tokio::io::split(serial);
+        let serial_builder =
+            tokio_serial::new(self.selected_port.port_name.clone(), self.selected_baud)
+                .data_bits(self.selected_data_bits)
+                .stop_bits(self.selected_stop_bits)
+                .parity(self.selected_parity);
+
+        let serial_mutex = Arc::clone(&self.serial_state);
         tokio::spawn(async move {
-            let rx_send = rx_sender.clone();
-            let mut buf = [0u8; 1024];
-            loop {
-                match serial_rx.read(&mut buf).await {
-                    Ok(n) => {
-                        rx_send.send(buf.to_vec()).await.unwrap();
-                    },
-                    Err(e) => {
-                        eprintln!("Read error: {}", e);
-                        break;
+            if let Ok(serial) = serial_builder.open_native_async() {
+                let read_mutex = Arc::clone(&serial_mutex);
+                let write_mutex = Arc::clone(&serial_mutex);
+                let (mut serial_rx, mut serial_tx) = tokio::io::split(serial);
+                let resd_task = tokio::spawn(async move {
+                    let rx_send = rx_sender.clone();
+                    let mut buf = [0u8; 1024];
+                    loop {
+                        let state = read_mutex.lock().await;
+                        if *state == SERIAL_STATE::DISCONNECTED {
+                            break;
+                        }
+                        match serial_rx.read(&mut buf).await {
+                            Ok(n) => {
+                                rx_send.send(buf.to_vec()).await.unwrap();
+                            }
+                            Err(e) => {
+                                eprintln!("Read error: {}", e);
+                                break;
+                            }
+                        }
                     }
-                }
-            }
-        });
+                });
 
-        tokio::spawn(async move {
-            while let Some(mut data) = tx_receiver.recv().await {
-                serial_tx.write_all(data.as_mut_slice()).await.unwrap();
+                let write_task = tokio::spawn(async move {
+                    loop{
+                        let state = write_mutex.lock().await;
+                        if *state == SERIAL_STATE::DISCONNECTED {
+                            break;
+                        }
+
+                        if let Some(mut data) = tx_receiver.recv().await {
+                            serial_tx.write_all(data.as_mut_slice()).await.unwrap();
+                        }
+                    }
+                    
+                });
+
+                let _ = tokio::join!(resd_task, write_task);
             }
         });
     }
 
-    fn disconnection(&mut self) {}
+    async fn disconnection(&mut self) {
+        let mut state = self.serial_state.lock().await;
+        *state = SERIAL_STATE::DISCONNECTED;
+    }
 }
 
 impl eframe::App for MainUi {
