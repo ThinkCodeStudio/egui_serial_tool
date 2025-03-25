@@ -95,7 +95,6 @@ impl MainUi {
                 });
 
                 let _ = tokio::join!(resd_task, write_task);
-                serial.shutdown().await.unwrap();
             }
         });
     }
