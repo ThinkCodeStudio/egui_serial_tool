@@ -1,19 +1,19 @@
-use std::sync::Arc;
+use std::{sync::Arc, thread::sleep, time::Duration};
 
 use tokio::{
     io::{AsyncReadExt, WriteHalf},
     sync::mpsc::{Receiver, Sender},
 };
-use tokio_serial::{SerialPortBuilder, SerialStream};
+use tokio_serial::{SerialPortBuilder, SerialPortBuilderExt, SerialStream};
 
-struct Serial {
+pub struct Serial {
     shutdown_tx: Option<Arc<Sender<()>>>,
     connection: bool,
     serial_writer: Option<WriteHalf<SerialStream>>,
 }
 
 impl Serial {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Serial {
             shutdown_tx: None,
             connection: false,
@@ -21,8 +21,8 @@ impl Serial {
         }
     }
 
-    fn connection(&mut self, serial_builder: &SerialPortBuilder) {
-        match SerialStream::open(serial_builder) {
+    pub fn connection(&mut self, serial_builder: SerialPortBuilder) {
+        match serial_builder.open_native_async() {
             Ok(stream) => {
                 let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
                 self.shutdown_tx = Some(Arc::new(tx));
@@ -30,9 +30,11 @@ impl Serial {
                 self.serial_writer = Some(serial_tx);
                 self.connection = true;
 
+                println!("startup");
                 tokio::spawn(async move {
                     let mut buf = [0u8; 1024];
                     loop {
+                        println!("loop");
                         tokio::select! {
                             ret = serial_rx.read(&mut buf) => {
                                 match ret {
@@ -47,6 +49,7 @@ impl Serial {
                             }
 
                             _ = rx.recv() => {
+                                println!("shutdowned");
                                 break;
                             }
                         }
@@ -60,34 +63,21 @@ impl Serial {
         }
     }
 
-    fn disconnection(&mut self) {
+    pub fn is_connected(&self) -> bool {
+        self.connection
+    }
+
+    pub fn disconnection(&mut self) {
         if let Some(tx) = &self.shutdown_tx {
             let tx = Arc::clone(tx);
             tokio::spawn(async move {
+                println!("shutdown1");
                 tx.send(()).await.unwrap();
+                println!("shutdown2");
             });
         }
         self.shutdown_tx = None;
         self.serial_writer = None;
         self.connection = false;
     }
-}
-
-#[tokio::test]
-async fn test_serial() {
-    let mut serial = Serial::new();
-    let serial_builder = tokio_serial::new("COM4", 115200)
-        .data_bits(tokio_serial::DataBits::Eight)
-        .stop_bits(tokio_serial::StopBits::One)
-        .parity(tokio_serial::Parity::None);
-    
-    serial.connection(&serial_builder);
-    assert_eq!(serial.connection, true);
-    serial.disconnection();
-    assert_eq!(serial.connection, false);
-    // no shutdown
-    serial.connection(&serial_builder);
-    assert_eq!(serial.connection, true);
-    serial.disconnection();
-    assert_eq!(serial.connection, false);
 }

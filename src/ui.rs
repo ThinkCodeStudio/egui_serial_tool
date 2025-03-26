@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::loader::load_baud;
+use crate::{loader::load_baud, serial};
 use eframe::egui;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -12,6 +12,8 @@ use tokio_serial::{
 
 const BAUD_FILE_PATH: &str = "baud.ini";
 
+use crate::serial::Serial;
+
 pub struct MainUi {
     serial_list: Vec<SerialPortInfo>,
     baud_list: Vec<u32>,
@@ -22,7 +24,7 @@ pub struct MainUi {
     selected_stop_bits: StopBits,
     selected_parity: Parity,
     en_connect: bool,
-    serial_stream: Option<Arc<Mutex<SerialStream>>>,
+    serial: Serial,
 }
 
 impl Default for MainUi {
@@ -40,55 +42,8 @@ impl Default for MainUi {
             selected_stop_bits: StopBits::One,
             selected_parity: Parity::None,
             en_connect: true,
-            serial_stream: None,
+            serial: Serial::new(),
         }
-    }
-}
-
-impl MainUi {
-    fn connection(&mut self) {
-
-        let serial_builder =
-            tokio_serial::new(self.selected_port.port_name.clone(), self.selected_baud)
-                .data_bits(self.selected_data_bits)
-                .stop_bits(self.selected_stop_bits)
-                .parity(self.selected_parity);
-
-        match SerialStream::open(&serial_builder) {
-            Ok(serial) => {
-                let serial = Arc::new(Mutex::new(serial));
-                self.serial_stream = Some(serial.clone());
-                self.en_connect = true;
-
-                tokio::spawn(async move {
-                    let mut serial = serial.lock().await;
-                    let mut buf = [0u8; 1024];
-                    loop {
-                        tokio::select! {
-                            ret = serial.read(&mut buf) => {
-                                match ret {
-                                    Ok(n) => {
-                                        println!("Read size: {}", n);
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Read error: {}", e);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    println!("task end");
-                });
-            }
-            Err(e) => {
-                eprintln!("Read error: {}", e);
-            }
-        }
-    }
-
-    fn disconnection(&mut self) {
-        self.serial_stream = None;
     }
 }
 
@@ -207,10 +162,17 @@ impl eframe::App for MainUi {
                     .clicked()
                 {
                     if self.selected_port.port_type != tokio_serial::SerialPortType::Unknown {
-                        if self.en_connect {
-                            self.connection();
+                        if self.serial.is_connected() {
+                            let serial_builder = tokio_serial::new(
+                                self.selected_port.port_name.clone(),
+                                self.selected_baud,
+                            )
+                            .data_bits(self.selected_data_bits)
+                            .stop_bits(self.selected_stop_bits)
+                            .parity(self.selected_parity);
+                            self.serial.connection(serial_builder);
                         } else {
-                            self.disconnection();
+                            self.serial.disconnection();
                         }
                         self.en_connect = !self.en_connect;
                     }
