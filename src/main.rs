@@ -4,6 +4,7 @@
 use eframe::egui;
 mod ui;
 mod loader;
+mod serial;
 use ui::MainUi;
 
 #[tokio::main]

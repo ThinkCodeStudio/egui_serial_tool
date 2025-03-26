@@ -47,8 +47,6 @@ impl Default for MainUi {
 
 impl MainUi {
     fn connection(&mut self) {
-        let (rx_sender, mut rx_receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
-        let (tx_sender, mut tx_receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
 
         let serial_builder =
             tokio_serial::new(self.selected_port.port_name.clone(), self.selected_baud)
@@ -64,23 +62,28 @@ impl MainUi {
 
                 tokio::spawn(async move {
                     let mut serial = serial.lock().await;
-
-                    let rx_send = rx_sender.clone();
                     let mut buf = [0u8; 1024];
                     loop {
-                        match serial.read(&mut buf).await {
-                            Ok(n) => {
-                                rx_send.send(buf.to_vec()).await.unwrap();
-                            }
-                            Err(e) => {
-                                eprintln!("Read error: {}", e);
-                                break;
+                        tokio::select! {
+                            ret = serial.read(&mut buf) => {
+                                match ret {
+                                    Ok(n) => {
+                                        println!("Read size: {}", n);
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Read error: {}", e);
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
+                    println!("task end");
                 });
             }
-            Err(_) => {}
+            Err(e) => {
+                eprintln!("Read error: {}", e);
+            }
         }
     }
 
