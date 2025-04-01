@@ -1,13 +1,7 @@
-use std::sync::Arc;
-
-use crate::{loader::load_baud, serial};
+use crate::loader::load_baud;
 use eframe::egui;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    sync::Mutex,
-};
 use tokio_serial::{
-    available_ports, DataBits, Parity, SerialPortBuilderExt, SerialPortInfo, SerialStream, StopBits,
+    available_ports, DataBits, Parity, SerialPortInfo, StopBits,
 };
 
 const BAUD_FILE_PATH: &str = "baud.ini";
@@ -23,8 +17,10 @@ pub struct MainUi {
     selected_data_bits: DataBits,
     selected_stop_bits: StopBits,
     selected_parity: Parity,
-    en_connect: bool,
+    ui_enable: bool,
     serial: Serial,
+
+    
 }
 
 impl Default for MainUi {
@@ -41,7 +37,7 @@ impl Default for MainUi {
             selected_data_bits: DataBits::Eight,
             selected_stop_bits: StopBits::One,
             selected_parity: Parity::None,
-            en_connect: true,
+            ui_enable: true,
             serial: Serial::new(),
         }
     }
@@ -52,13 +48,13 @@ impl eframe::App for MainUi {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(self.en_connect, egui::Button::new("🔄"))
+                    .add_enabled(self.ui_enable, egui::Button::new("🔄"))
                     .clicked()
                 {
                     self.serial_list = available_ports().unwrap_or(vec![])
                 }
 
-                ui.add_enabled_ui(self.en_connect, |ui| {
+                ui.add_enabled_ui(self.ui_enable, |ui| {
                     egui::ComboBox::from_label("Port")
                         .selected_text(format!("{}", self.selected_port.port_name))
                         .show_ui(ui, |ui| {
@@ -72,7 +68,7 @@ impl eframe::App for MainUi {
                         });
                 });
 
-                ui.add_enabled_ui(self.en_connect, |ui| {
+                ui.add_enabled_ui(self.ui_enable, |ui| {
                     egui::ComboBox::from_label("Baud")
                         .selected_text(format!("{}", self.selected_baud))
                         .show_ui(ui, |ui| {
@@ -86,7 +82,7 @@ impl eframe::App for MainUi {
                         });
                 });
 
-                ui.add_enabled_ui(self.en_connect, |ui| {
+                ui.add_enabled_ui(self.ui_enable, |ui| {
                     egui::ComboBox::from_label("Data Bits")
                         .selected_text(format!("{}", u8::from(self.selected_data_bits)))
                         .show_ui(ui, |ui| {
@@ -113,7 +109,7 @@ impl eframe::App for MainUi {
                         });
                 });
 
-                ui.add_enabled_ui(self.en_connect, |ui| {
+                ui.add_enabled_ui(self.ui_enable, |ui| {
                     egui::ComboBox::from_label("Stop Bits")
                         .selected_text(format!("{}", u8::from(self.selected_stop_bits)))
                         .show_ui(ui, |ui| {
@@ -131,7 +127,7 @@ impl eframe::App for MainUi {
                         });
                 });
 
-                ui.add_enabled_ui(self.en_connect, |ui| {
+                ui.add_enabled_ui(self.ui_enable, |ui| {
                     egui::ComboBox::from_label("Parity")
                         .selected_text(format!("{}", self.selected_parity))
                         .show_ui(ui, |ui| {
@@ -154,7 +150,7 @@ impl eframe::App for MainUi {
                 });
 
                 if ui
-                    .add(egui::Button::new(if self.en_connect {
+                    .add(egui::Button::new(if self.ui_enable {
                         "connection"
                     } else {
                         "disconnection"
@@ -162,7 +158,7 @@ impl eframe::App for MainUi {
                     .clicked()
                 {
                     if self.selected_port.port_type != tokio_serial::SerialPortType::Unknown {
-                        if self.serial.is_connected() {
+                        if !self.serial.is_connected() {
                             let serial_builder = tokio_serial::new(
                                 self.selected_port.port_name.clone(),
                                 self.selected_baud,
@@ -170,11 +166,12 @@ impl eframe::App for MainUi {
                             .data_bits(self.selected_data_bits)
                             .stop_bits(self.selected_stop_bits)
                             .parity(self.selected_parity);
-                            self.serial.connection(serial_builder);
+                            let _ = self.serial.connection(serial_builder);
+                            self.ui_enable = false;
                         } else {
                             self.serial.disconnection();
+                            self.ui_enable = true;
                         }
-                        self.en_connect = !self.en_connect;
                     }
                 }
             });
